@@ -1,0 +1,142 @@
+# Scenario C — Failed Deployment (Bad Image Reference)
+# ======================================================
+# This manifest deliberately references an image tag that does not exist
+# ("reliability-app:does-not-exist-999").  When applied, the ReplicaSet
+# cannot create Pods because the image pull fails with ErrImageNeverPull
+# (since imagePullPolicy: Never is set and the image is not locally loaded).
+#
+# This simulates the most common rollout failure in CI/CD pipelines:
+# a new image tag is pushed to the Deployment manifest but the image
+# has not been built or pushed to the registry.
+#
+# HOW TO REPRODUCE:
+#   kubectl apply -f k8s/scenarios/c-bad-rollout/bad-deployment.yaml -n reliability-lab
+#
+# OBSERVE:
+#   kubectl rollout status deployment/reliability-app -n reliability-lab
+#     → "Waiting for deployment ... to finish: 0 out of 1 new replicas have been updated..."
+#   kubectl get pods -n reliability-lab
+#     → New Pod stuck in ErrImageNeverPull or ImagePullBackOff
+#   kubectl describe pod <new-pod-name> -n reliability-lab
+#     → Events section shows "Failed to pull image"
+#   kubectl rollout history deployment/reliability-app -n reliability-lab
+#     → Shows the new (failed) revision
+#
+# HOW TO RECOVER (option 1 — rollback to previous working revision):
+#   kubectl rollout undo deployment/reliability-app -n reliability-lab
+#   kubectl rollout status deployment/reliability-app -n reliability-lab
+#
+# HOW TO RECOVER (option 2 — apply a corrected manifest):
+#   kubectl apply -f k8s/base/deployment.yaml -n reliability-lab
+#
+# WHAT ROLLBACK DOES NOT REVERSE:
+# - Database schema migrations already applied by the new version
+# - Messages published to a queue or event stream
+# - Files written to a PersistentVolume
+# - External API calls made during the (failed) startup
+# These are out of scope for this lab but must be understood in production.
+#
+# IMPORTANT: The old Pods (from the previous ReplicaSet) continue serving
+# traffic during the failed rollout because maxUnavailable: 0 prevents
+# Kubernetes from terminating them until the new Pod is Ready.
+# The new Pod never becomes Ready (image pull fails → no probe checks).
+# The Service keeps routing to the old Pods throughout.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reliability-app
+  namespace: reliability-lab
+  labels:
+    app.kubernetes.io/name: reliability-app
+    # Tag intentionally wrong to trigger the failure
+    app.kubernetes.io/version: "does-not-exist-999"
+    app.kubernetes.io/component: webserver
+    app.kubernetes.io/managed-by: kubectl
+  annotations:
+    # This annotation is read by `kubectl rollout history` when --revision is used.
+    kubernetes.io/change-cause: "Scenario C — intentionally bad image tag (lab demonstration)"
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: reliability-app
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: reliability-app
+        app.kubernetes.io/version: "does-not-exist-999"
+    spec:
+      serviceAccountName: reliability-app-sa
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: reliability-app
+          # This tag does not exist — the image was never built or loaded.
+          image: reliability-app:does-not-exist-999
+          imagePullPolicy: Never  # Forces ErrImageNeverPull instead of ImagePullBackOff
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: reliability-app-config
+            - secretRef:
+                name: reliability-app-secret
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          startupProbe:
+            httpGet:
+              path: /startup
+              port: http
+            initialDelaySeconds: 0
+            periodSeconds: 5
+            failureThreshold: 6
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+            timeoutSeconds: 2
+          volumeMounts:
+            - name: tmp-dir
+              mountPath: /tmp
+      volumes:
+        - name: tmp-dir
+          emptyDir: {}

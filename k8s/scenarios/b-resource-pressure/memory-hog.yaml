@@ -1,0 +1,121 @@
+# Scenario B — Resource Pressure (Memory Limit → OOMKill)
+# =========================================================
+# This is a SEPARATE, DISPOSABLE workload that does NOT affect the baseline
+# application.  It is deployed and removed independently.
+#
+# The workload runs a Python process that allocates memory in a loop until
+# it exceeds its memory limit (64 MiB).  The Linux kernel's OOM killer
+# then terminates the process, and Kubernetes restarts the container.
+#
+# The Pod will appear in CrashLoopBackOff after repeated OOMKills because
+# each restart causes an exponentially increasing back-off delay.
+#
+# HOW TO REPRODUCE:
+#   kubectl apply -f k8s/scenarios/b-resource-pressure/ -n reliability-lab
+#   kubectl get pods -n reliability-lab -w   # watch for OOMKilled status
+#   kubectl describe pod -l lab.scenario=b-resource-pressure -n reliability-lab
+#
+# Look for:
+#   Last State: Terminated
+#   Reason:     OOMKilled
+#   Exit Code:  137  (128 + SIGKILL signal 9)
+#
+# HOW TO CLEAN UP:
+#   kubectl delete -f k8s/scenarios/b-resource-pressure/ -n reliability-lab
+#
+# SAFETY NOTES:
+# - Memory limit is 64 MiB — well within the namespace ResourceQuota (1 GiB).
+# - The Pod is a standalone Job (restartPolicy: Never on the container would
+#   prevent infinite loops, but we use a Deployment with low replicas and
+#   a very low limit to demonstrate OOMKill clearly).
+# - Do NOT increase the memory limit beyond the ResourceQuota allows.
+# - Clean up immediately after demonstrating the scenario.
+#
+# WHAT THIS DEMONSTRATES:
+# - OOMKilled exit code 137 (distinct from application crash exit codes)
+# - CrashLoopBackOff exponential back-off (30s, 1m, 2m, 4m, ...)
+# - kubectl top pods showing memory approaching the limit (requires metrics-server)
+# - How to distinguish OOMKill from scheduling failure (Pending vs. OOMKilled)
+# - How to recover (delete the workload; the baseline app is unaffected)
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: memory-hog
+  namespace: reliability-lab
+  labels:
+    app.kubernetes.io/name: memory-hog
+    app.kubernetes.io/component: scenario
+    lab.scenario: b-resource-pressure
+  annotations:
+    kubernetes.io/change-cause: "Scenario B — memory pressure demonstration"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: memory-hog
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: memory-hog
+        lab.scenario: b-resource-pressure
+    spec:
+      # Use the default service account — this is a disposable test workload.
+      automountServiceAccountToken: false
+
+      # terminationGracePeriodSeconds: 5 — short because we want to reclaim
+      # resources quickly after the scenario is over.
+      terminationGracePeriodSeconds: 5
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: memory-consumer
+          # Use the same Python slim image to avoid an extra pull.
+          # This requires the image to be available in the kind cluster.
+          # We use python:3.13-slim-bookworm directly here (not our app image)
+          # because it is available after the Docker build phase.
+          image: python:3.13-slim-bookworm
+          imagePullPolicy: IfNotPresent
+
+          # Inline Python script: allocate 1 MiB per second until OOMKilled.
+          # The sleep between allocations makes the growth visible in kubectl top.
+          # No probes are configured on this container intentionally.
+          # This is a disposable test workload designed to be OOMKilled, not
+          # kept healthy.  Probes on a workload that is supposed to crash would
+          # add noise to the scenario output and are not meaningful here.
+          # The manifest validator will emit a warning about this; it is expected.
+          command:
+            - python3
+            - -c
+            - |
+              import time, sys
+              chunks = []
+              chunk_size = 1024 * 1024  # 1 MiB
+              print("Starting memory allocation. Limit is 64 MiB.", flush=True)
+              i = 0
+              while True:
+                  chunks.append(b"x" * chunk_size)
+                  i += 1
+                  print(f"Allocated {i} MiB total", flush=True)
+                  time.sleep(1)
+
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "32Mi"
+            limits:
+              cpu: "100m"
+              # 64 MiB limit — the process will be OOMKilled when it exceeds this.
+              memory: "64Mi"
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL

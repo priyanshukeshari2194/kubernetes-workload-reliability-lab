@@ -1,0 +1,141 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs for the same branch on new pushes
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Unit tests and static checks
+  # These run without Docker, a cluster, or any cloud resource.
+  # ---------------------------------------------------------------------------
+  unit-tests:
+    name: Unit Tests & Static Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+          cache-dependency-path: app/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r app/requirements-dev.txt
+
+      - name: Run unit tests
+        run: python -m pytest tests/unit/ -v --tb=short
+
+      - name: Validate Kubernetes manifests (static, no cluster)
+        run: python tests/validate_manifests.py
+
+  # ---------------------------------------------------------------------------
+  # Job 2: YAML lint
+  # Catches YAML formatting issues that the Python yaml parser accepts but
+  # that kubectl or other tools may reject.
+  # ---------------------------------------------------------------------------
+  yaml-lint:
+    name: YAML Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: pip install yamllint==1.35.1
+
+      - name: Lint k8s manifests
+        # We use a relaxed config so educational comments don't trigger
+        # line-length warnings (YAML comments count as long lines).
+        run: |
+          yamllint \
+            --config-data '{extends: relaxed, rules: {line-length: {max: 120}}}' \
+            k8s/
+
+  # ---------------------------------------------------------------------------
+  # Job 3: Docker image build (build only, no push, no registry)
+  # Verifies the Dockerfile builds successfully.
+  # We do NOT push to any registry in CI — the lab is local-only.
+  # ---------------------------------------------------------------------------
+  docker-build:
+    name: Docker Image Build (local, no push)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --tag reliability-app:ci-test \
+            --file app/Dockerfile \
+            app/
+
+      - name: Verify image runs and health endpoint responds
+        run: |
+          # Start the container in the background
+          docker run --rm -d \
+            --name reliability-app-test \
+            -p 8080:8080 \
+            -e READY_TO_SERVE=true \
+            reliability-app:ci-test
+
+          # Give uvicorn a moment to start
+          sleep 3
+
+          # Check the health endpoint
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/health)
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "Health check failed: expected 200, got $HTTP_STATUS"
+            docker logs reliability-app-test
+            docker stop reliability-app-test
+            exit 1
+          fi
+          echo "Health check passed: HTTP $HTTP_STATUS"
+
+          # Check the readiness endpoint (READY_TO_SERVE=true → 200)
+          READY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/ready)
+          if [ "$READY_STATUS" != "200" ]; then
+            echo "Readiness check failed: expected 200, got $READY_STATUS"
+            docker logs reliability-app-test
+            docker stop reliability-app-test
+            exit 1
+          fi
+          echo "Readiness check passed: HTTP $READY_STATUS"
+
+          # Verify readiness failure when READY_TO_SERVE=false
+          docker stop reliability-app-test
+          docker run --rm -d \
+            --name reliability-app-test-fail \
+            -p 8081:8080 \
+            -e READY_TO_SERVE=false \
+            reliability-app:ci-test
+          sleep 3
+          FAIL_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8081/ready)
+          docker stop reliability-app-test-fail
+          if [ "$FAIL_STATUS" != "503" ]; then
+            echo "Expected 503 when READY_TO_SERVE=false, got $FAIL_STATUS"
+            exit 1
+          fi
+          echo "Readiness failure test passed: HTTP $FAIL_STATUS (expected 503)"
+
+  # ---------------------------------------------------------------------------
+  # NOTE: Kubernetes smoke tests are NOT run in CI.
+  # They require a live kind cluster and port-forward, which adds significant
+  # complexity and runtime to CI for marginal benefit.
+  # Run them locally: make deploy-all && make port-forward && make smoke-test
+  # This is documented in docs/setup.md under "Running tests".
+  # ---------------------------------------------------------------------------

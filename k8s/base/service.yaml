@@ -1,0 +1,44 @@
+# Service — expose the Deployment within the cluster
+# ====================================================
+# A Service provides a stable IP address and DNS name for a set of Pods
+# selected by a label selector.  Because Pods are ephemeral (they can be
+# replaced, rescheduled, or scaled), you should never connect to a Pod IP
+# directly.
+#
+# Type: ClusterIP (default)
+# - Accessible only within the cluster.
+# - For local access we use `kubectl port-forward` (see Makefile / scripts).
+# - For production you would add an Ingress or use LoadBalancer type.
+#   We do not use NodePort or LoadBalancer to keep the lab self-contained.
+#
+# How the Service interacts with readiness probes (key for Scenario A):
+# The Endpoints object that backs this Service is managed by the Endpoints
+# controller.  It includes a Pod's IP only if ALL of its readiness probes
+# are passing.  When a readiness probe fails, the Pod's IP is removed from
+# Endpoints; traffic stops reaching it.  This happens WITHOUT restarting
+# the Pod.
+#
+# You can verify this with:
+#   kubectl get endpoints reliability-app-svc -n reliability-lab -o yaml
+# Look for the Pod IP appearing/disappearing as probes succeed/fail.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: reliability-app-svc
+  namespace: reliability-lab
+  labels:
+    app.kubernetes.io/name: reliability-app
+    app.kubernetes.io/component: service
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  type: ClusterIP
+  selector:
+    # Must match the Pod labels in the Deployment template exactly.
+    # A mismatch here means the Service has no endpoints — a common bug.
+    app.kubernetes.io/name: reliability-app
+  ports:
+    - name: http
+      port: 80          # Port clients connect to on the Service ClusterIP
+      targetPort: http  # Maps to containerPort named "http" (8080) in the Pod
+      protocol: TCP

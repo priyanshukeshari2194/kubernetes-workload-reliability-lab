@@ -1,0 +1,15 @@
+# Development + test dependencies (not baked into the container image).
+# Install with: pip install -r requirements-dev.txt
+
+-r requirements.txt
+
+# Testing
+pytest==8.3.5
+pytest-asyncio==0.26.0
+anyio==4.9.0
+
+# Linting / formatting (local use only, not required in CI image)
+ruff==0.11.8
+
+# YAML validation for Kubernetes manifests
+pyyaml==6.0.2

@@ -1,0 +1,32 @@
+# WSL2 Memory Configuration
+# ==========================
+# Place this file at: C:\Users\<YourUsername>\.wslconfig
+# (Your home directory on Windows, not inside WSL2)
+#
+# After saving, restart WSL2 from PowerShell:
+#   wsl --shutdown
+#   # Then open a new WSL2 terminal
+#
+# These settings limit WSL2's memory footprint so kind and Docker
+# leave enough RAM for your Windows desktop and browser.
+#
+# For an 8 GB laptop:
+#   memory=4GB  — leaves 4 GB for Windows + WSL overhead
+#
+# For a 16 GB laptop:
+#   memory=8GB  — gives more headroom for running multiple scenarios
+
+[wsl2]
+# Maximum memory WSL2 may use (adjust based on your total RAM)
+memory=4GB
+
+# Maximum swap space (virtual memory backed by disk)
+# Keep low to avoid disk thrashing on SSDs
+swap=2GB
+
+# Limit WSL2's CPU usage to half your physical cores
+# Remove this line if kind cluster creation is slow
+# processors=4
+
+# Optional: use a fixed IP for WSL2 (helps with port-forward reliability)
+# networkingMode=mirrored

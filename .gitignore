@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+.env
+*.pyc
+
+# Virtual environments
+.python-version
+
+# Test artifacts
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.junit.xml
+
+# Docker
+*.tar
+
+# Kubernetes / Helm
+*.kubeconfig
+kubeconfig
+*.secret.yaml
+# Never commit real secrets. Placeholder files are committed; they end in .example.yaml
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# OS
+desktop.ini
+
+# CI cache
+.cache/
+
+# kind cluster configs with embedded certs (regenerated each run)
+kind-kubeconfig*

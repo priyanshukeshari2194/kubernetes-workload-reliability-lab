@@ -1,0 +1,40 @@
+# ConfigMap — non-sensitive application configuration
+# =====================================================
+# A ConfigMap stores configuration data that is safe to commit to version
+# control.  NEVER put passwords, tokens, or API keys here.
+#
+# These values are injected into the container as environment variables by
+# the Deployment manifest (envFrom.configMapRef).
+#
+# Why use a ConfigMap instead of baking values into the image?
+# - Changing a ConfigMap value does not require rebuilding the image.
+# - Different environments (dev/staging/prod) can use different ConfigMaps
+#   with the same image, supporting the "build once, deploy anywhere" principle.
+# - It makes configuration changes visible in Git history.
+#
+# What a ConfigMap does NOT protect:
+# - Values are stored in plain text in etcd.  An attacker with etcd access
+#   can read them.  This is why secrets (even placeholder ones) go in a
+#   separate Secret object, which at least makes the intent clear.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reliability-app-config
+  namespace: reliability-lab
+  labels:
+    app.kubernetes.io/name: reliability-app
+    app.kubernetes.io/component: configuration
+    app.kubernetes.io/managed-by: kubectl
+data:
+  # Controls whether the /ready probe returns 200 or 503.
+  # Set to "false" to trigger Scenario A (readiness failure).
+  # See k8s/scenarios/a-readiness-failure/ for the patched ConfigMap.
+  READY_TO_SERVE: "true"
+
+  # Application environment label — surfaced in the / endpoint response.
+  APP_ENV: "lab"
+
+  # Log level passed to the application.
+  # FastAPI/uvicorn ignores this variable; the app reads it for its own logger.
+  LOG_LEVEL: "INFO"

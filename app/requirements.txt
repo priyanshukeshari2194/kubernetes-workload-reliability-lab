@@ -1,0 +1,14 @@
+# Production dependencies — pinned for reproducibility.
+# Update with: pip install --upgrade <package> then verify tests pass.
+#
+# Why pin versions?
+# Unpinned images can silently pull newer library versions on rebuild,
+# making failure scenarios non-reproducible.  In this lab that matters
+# because a probe-failure scenario must behave the same every time.
+
+fastapi==0.115.12
+uvicorn[standard]==0.34.3
+httpx==0.28.1          # Used in smoke tests to call the running app
+
+# Optional — uncomment to enable /metrics (Prometheus scrape endpoint).
+# prometheus-fastapi-instrumentator==7.1.0

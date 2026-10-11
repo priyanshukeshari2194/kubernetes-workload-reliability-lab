@@ -1,0 +1,40 @@
+# Scenario A — Readiness Probe Failure
+# ======================================
+# This ConfigMap patch overrides READY_TO_SERVE to "false".
+# When the Deployment picks up this ConfigMap, the /ready endpoint returns
+# 503, causing the readiness probe to fail.
+#
+# HOW TO APPLY (Scenario A):
+#   kubectl apply -f k8s/scenarios/a-readiness-failure/configmap-patch.yaml -n reliability-lab
+#
+# Wait ~30 seconds (3 probe failures × 10s period), then:
+#   kubectl get pods -n reliability-lab
+#   kubectl describe pod <pod-name> -n reliability-lab   # look for "Readiness probe failed"
+#   kubectl get endpoints reliability-app-svc -n reliability-lab
+#
+# HOW TO RESTORE (reset to normal):
+#   kubectl apply -f k8s/base/configmap.yaml -n reliability-lab
+#
+# NOTE: Kubernetes does NOT automatically restart Pods when a ConfigMap changes.
+# You must restart the Deployment to force Pods to re-read the new env vars:
+#   kubectl rollout restart deployment/reliability-app -n reliability-lab
+#
+# This is an important real-world gotcha: ConfigMap changes are not live-reloaded
+# unless your application explicitly watches the mounted file.
+# When using envFrom (as we do), you must restart the Pod.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: reliability-app-config
+  namespace: reliability-lab
+  labels:
+    app.kubernetes.io/name: reliability-app
+    app.kubernetes.io/component: configuration
+    app.kubernetes.io/managed-by: kubectl
+    lab.scenario: "a-readiness-failure"
+data:
+  # This is the change that triggers the failure.
+  READY_TO_SERVE: "false"
+  APP_ENV: "lab"
+  LOG_LEVEL: "INFO"

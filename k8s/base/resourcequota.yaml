@@ -1,0 +1,48 @@
+# ResourceQuota — limit total resource consumption in the namespace
+# =================================================================
+# A ResourceQuota prevents the lab namespace from consuming unbounded
+# cluster resources.  This is important for:
+# - Shared clusters (prevents one namespace starving others)
+# - Scenario B: the quota limits how large an "OOM bomb" we can create,
+#   protecting the host from accidental resource exhaustion
+#
+# These limits are sized for an 8 GB RAM laptop running kind.
+# kind typically allocates one Docker container as the "node".
+# We leave headroom for the Kubernetes control plane components
+# (API server, etcd, controller-manager, scheduler).
+#
+# Hard limits vs. requests:
+# requests.cpu / requests.memory — total of all Pod resource *requests*
+#   in this namespace.  Used for scheduling decisions.
+# limits.cpu / limits.memory — total of all Pod resource *limits*.
+#   A Pod cannot be admitted if adding it would exceed the namespace limit.
+# pods — maximum number of Pods that can exist simultaneously.
+#
+# What ResourceQuota does NOT do:
+# - It does not prevent a single Pod from consuming its entire limit.
+# - It does not throttle already-running Pods retroactively.
+# - It requires that every Pod specifies requests AND limits when
+#   requests.cpu or requests.memory quotas are set (enforced by the
+#   admission controller).  Our LimitRange below provides defaults.
+
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: reliability-lab-quota
+  namespace: reliability-lab
+  labels:
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  hard:
+    # CPU: 2 cores total requests, 4 cores total limits
+    requests.cpu: "2"
+    limits.cpu: "4"
+    # Memory: 512 MiB total requests, 1 GiB total limits
+    requests.memory: 512Mi
+    limits.memory: 1Gi
+    # Pod count limit
+    pods: "10"
+    # Object count limits — prevent accidental resource sprawl
+    configmaps: "10"
+    secrets: "10"
+    services: "5"

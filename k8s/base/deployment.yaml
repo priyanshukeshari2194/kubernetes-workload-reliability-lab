@@ -1,0 +1,238 @@
+# Deployment — the main application workload
+# ===========================================
+# A Deployment manages a ReplicaSet, which manages Pods.
+# The indirection (Deployment → ReplicaSet → Pod) enables:
+# - Rolling updates with zero-downtime rollouts (when configured correctly)
+# - Revision history for rollback (Scenario C)
+# - Self-healing: if a Pod exits, the ReplicaSet controller creates a new one
+#
+# Image: reliability-app:1.0.0
+# We use a local tag that must be loaded into the kind cluster before applying.
+# The tag matches APP_VERSION in main.py.
+# imagePullPolicy: Never tells Kubernetes to use the locally-loaded image
+# rather than attempting to pull from a registry.  Change to IfNotPresent
+# or Always when using a real registry.
+#
+# KEY DESIGN DECISIONS (each explained inline):
+# 1. replicas: 2        — two replicas so rolling updates keep one pod alive
+# 2. strategy           — RollingUpdate with maxUnavailable: 0
+# 3. probes             — startup + readiness + liveness with distinct timings
+# 4. resources          — explicit requests and limits on every container
+# 5. securityContext    — non-root, read-only root filesystem, no privilege escalation
+# 6. serviceAccountName — dedicated SA, not the default
+# 7. revisionHistoryLimit: 3 — keep 3 old ReplicaSets for rollback
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reliability-app
+  namespace: reliability-lab
+  labels:
+    app.kubernetes.io/name: reliability-app
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/component: webserver
+    app.kubernetes.io/managed-by: kubectl
+  annotations:
+    # Free-text change record — not processed by Kubernetes but useful in
+    # kubectl describe and rollout history.
+    kubernetes.io/change-cause: "Initial deployment — baseline application"
+spec:
+  # Two replicas ensure that a rolling update can terminate one Pod while
+  # keeping the other serving traffic, satisfying maxUnavailable: 0.
+  replicas: 2
+
+  # Keep 3 old ReplicaSets so we can roll back up to 3 versions (Scenario C).
+  # Each old ReplicaSet consumes a small amount of etcd storage.
+  revisionHistoryLimit: 3
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: reliability-app
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # maxUnavailable: 0 — Kubernetes must not remove an old Pod until a new
+      # Pod is Ready.  Combined with readiness probes, this means traffic is
+      # never routed to a Pod that has not passed its readiness check.
+      # Cost: updates take longer because the new Pod must be Ready before
+      # the old one is terminated.
+      maxUnavailable: 0
+      # maxSurge: 1 — Kubernetes may create one extra Pod above replicas (3
+      # total) during the update to allow the new version to become Ready
+      # before the old version is removed.
+      maxSurge: 1
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: reliability-app
+        app.kubernetes.io/version: "1.0.0"
+    spec:
+      # Use the dedicated ServiceAccount with no token mount.
+      serviceAccountName: reliability-app-sa
+      automountServiceAccountToken: false
+
+      # terminationGracePeriodSeconds: 30 (default)
+      # Kubernetes sends SIGTERM and waits this many seconds before SIGKILL.
+      # uvicorn handles SIGTERM gracefully, finishing in-flight requests.
+      terminationGracePeriodSeconds: 30
+
+      # Pod-level security context.
+      # runAsNonRoot: true — the admission controller rejects the Pod if the
+      # container's UID resolves to 0 (root).  Combined with runAsUser: 1001
+      # in the container, this is defence-in-depth: even if the image were
+      # accidentally rebuilt to run as root, the admission check catches it.
+      # seccompProfile: RuntimeDefault — use the container runtime's default
+      # seccomp filter, which blocks ~300 rarely-needed Linux syscalls.
+      # This is a meaningful security improvement over unconfined.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: reliability-app
+          image: reliability-app:1.0.0
+          # Never pull from a registry — use the image loaded into kind.
+          # Change to IfNotPresent when pushing to a registry.
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          # Environment variables from the ConfigMap.
+          # envFrom loads ALL keys as environment variables.
+          # If you only want specific keys, use env[].valueFrom.configMapKeyRef.
+          envFrom:
+            - configMapRef:
+                name: reliability-app-config
+            # The Secret is referenced here; in this lab the only key is a
+            # placeholder.  In a real app, only mount secrets that the
+            # container actually uses.
+            - secretRef:
+                name: reliability-app-secret
+
+          # ------------------------------------------------------------------
+          # Resource requests and limits
+          # ------------------------------------------------------------------
+          # requests: the amount the scheduler reserves on the node.
+          #   Kubernetes uses requests for bin-packing decisions.
+          #   A node with 2 CPU cores can schedule many Pods with 100m requests.
+          # limits: the hard ceiling enforced by the kernel cgroups.
+          #   CPU: throttled (not killed) when the limit is exceeded.
+          #   Memory: the container is OOMKilled when it exceeds the limit.
+          #
+          # Sizing rationale for this lab:
+          # - FastAPI + uvicorn idle: ~30m CPU, ~60 MiB RAM.
+          # - We request 100m/128Mi to ensure the Pod is schedulable on a
+          #   resource-constrained kind node.
+          # - We limit to 250m/256Mi, leaving headroom for two replicas within
+          #   the namespace ResourceQuota.
+          #
+          # DO NOT use these numbers in production without profiling your app.
+          resources:
+            requests:
+              cpu: "100m"      # 0.1 CPU core
+              memory: "128Mi"
+            limits:
+              cpu: "250m"      # 0.25 CPU core — throttled, not killed if exceeded
+              memory: "256Mi"  # 256 MiB — OOMKilled if exceeded (Scenario B)
+
+          # ------------------------------------------------------------------
+          # Container-level security context
+          # ------------------------------------------------------------------
+          securityContext:
+            # allowPrivilegeEscalation: false — the process cannot gain more
+            # privileges than its parent (e.g., via setuid binaries or sudo).
+            allowPrivilegeEscalation: false
+            # readOnlyRootFilesystem: true — the container cannot write to its
+            # own filesystem.  This prevents an attacker from modifying binaries
+            # or writing a reverse shell.  The app only needs to write to /tmp
+            # (handled by the emptyDir volume below).
+            readOnlyRootFilesystem: true
+            # capabilities.drop: ALL — drop every Linux capability the process
+            # would inherit.  Our FastAPI app needs none of them.
+            # Capabilities are granular root privileges (e.g., CAP_NET_ADMIN,
+            # CAP_SYS_PTRACE).  Dropping all of them limits what a compromised
+            # container can do to the node.
+            capabilities:
+              drop:
+                - ALL
+
+          # ------------------------------------------------------------------
+          # Probes — three distinct probe types, each with a different purpose
+          # ------------------------------------------------------------------
+          #
+          # STARTUP PROBE
+          # Kubernetes calls this probe repeatedly from container start until it
+          # succeeds, then never again.  While it is failing, liveness and
+          # readiness probes are disabled.
+          # Purpose: give slow-starting containers time to initialize without
+          # being killed by the liveness probe.
+          # Our app starts in < 1s, so failureThreshold × periodSeconds = 30s
+          # is generous.  Increase for apps that run database migrations.
+          startupProbe:
+            httpGet:
+              path: /startup
+              port: http
+            initialDelaySeconds: 0   # Start checking immediately
+            periodSeconds: 5         # Check every 5 seconds
+            failureThreshold: 6      # Allow up to 30 seconds (6 × 5) to start
+            successThreshold: 1
+            timeoutSeconds: 2
+
+          # READINESS PROBE
+          # Kubernetes calls this probe repeatedly throughout the container
+          # lifetime.  A failure removes the Pod from the Service's Endpoints
+          # (traffic stops reaching it) WITHOUT restarting the container.
+          # Purpose: signal that the container is ready to handle requests.
+          # Use this for warm-up, cache loading, or dependency checks.
+          # Scenario A exploits this probe: setting READY_TO_SERVE=false
+          # causes /ready to return 503, removing the Pod from Service rotation.
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 3   # Wait 3s after startup probe passes
+            periodSeconds: 10        # Check every 10 seconds
+            failureThreshold: 3      # Remove from endpoints after 3 failures (30s)
+            successThreshold: 1      # One success re-adds the Pod to endpoints
+            timeoutSeconds: 2
+
+          # LIVENESS PROBE
+          # Kubernetes calls this probe repeatedly.  A failure restarts the
+          # container.  This is a last resort for detecting deadlocks or
+          # corrupted state.
+          # Purpose: detect a stuck or deadlocked process.
+          # WARNING: a liveness probe that is too aggressive (short period,
+          # low failureThreshold) causes restart loops.  Set it conservatively.
+          # A liveness failure is more disruptive than a readiness failure
+          # because it terminates the container.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10  # Wait 10s after startup probe passes
+            periodSeconds: 15        # Check every 15 seconds
+            failureThreshold: 3      # Restart after 3 consecutive failures (45s)
+            successThreshold: 1
+            timeoutSeconds: 2
+
+          # ------------------------------------------------------------------
+          # Volumes — required because readOnlyRootFilesystem: true
+          # ------------------------------------------------------------------
+          # uvicorn may need to write temporary files to /tmp.
+          # An emptyDir volume is created fresh for each Pod and deleted when
+          # the Pod is removed.  It is not shared between Pods.
+          volumeMounts:
+            - name: tmp-dir
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp-dir
+          emptyDir: {}

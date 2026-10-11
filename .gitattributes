@@ -1,0 +1,36 @@
+# .gitattributes — line ending control
+# =====================================
+# Shell scripts must have LF line endings to run inside WSL2/Linux.
+# Git on Windows converts LF to CRLF by default; this file overrides that.
+#
+# When you `git checkout` on Windows, these files will keep LF endings
+# so they execute correctly in WSL2 without modification.
+
+# Default: normalize all text files to LF in the repo
+* text=auto eol=lf
+
+# Shell scripts: enforce LF explicitly (critical for WSL2 execution)
+*.sh text eol=lf
+
+# Python files: LF is fine, but auto-normalize handles this
+*.py text eol=lf
+
+# YAML/JSON: LF
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.json text eol=lf
+
+# Makefile: must be LF (make is sensitive to line endings on some platforms)
+Makefile text eol=lf
+
+# Markdown: LF
+*.md text eol=lf
+
+# Windows-specific scripts: CRLF is acceptable for .ps1 on Windows
+*.ps1 text eol=crlf
+
+# Binary files: no line ending conversion
+*.png binary
+*.jpg binary
+*.tar binary
+*.gz  binary

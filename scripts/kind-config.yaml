@@ -1,0 +1,45 @@
+# kind cluster configuration for the Reliability Lab
+# ====================================================
+# This configuration creates a single-node kind cluster sized for an 8 GB
+# RAM laptop.  A single control-plane node acts as both control plane and
+# worker — sufficient for demonstrating all three failure scenarios.
+#
+# Resource guidance:
+#   kind node (Docker container): typically uses 512 MiB–1.5 GiB RAM at idle.
+#   2 app replicas + 1 memory-hog Pod peak usage: ~600 MiB RAM.
+#   Leave 4+ GiB for the host OS and WSL2 overhead.
+#
+# If you have less than 6 GB RAM available to WSL2, set the memory limit in
+# %USERPROFILE%\.wslconfig (Windows) before starting:
+#   [wsl2]
+#   memory=4GB
+#
+# Port mappings:
+#   hostPort 30080 → containerPort 30080 (NodePort for direct access without
+#   kubectl port-forward).  You can also use `make port-forward` instead.
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+
+# Cluster name is set via `kind create cluster --name <name>` — not here.
+
+nodes:
+  - role: control-plane
+    # Extra port mappings make it possible to access NodePort services without
+    # kubectl port-forward.  The lab uses port-forward by default.
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 30080
+        listenAddress: "127.0.0.1"
+        protocol: TCP
+
+# kubeadmConfigPatches allows us to configure API server feature gates.
+# For this lab we enable the default configuration — no custom gates needed.
+kubeadmConfigPatches:
+  - |
+    kind: ClusterConfiguration
+    apiServer:
+      extraArgs:
+        # Enable server-side apply (used by kubectl apply --server-side).
+        # This is the default in Kubernetes 1.22+; listed here for explicitness.
+        feature-gates: ""

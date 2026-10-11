@@ -1,0 +1,26 @@
+# Namespace — isolate all lab resources
+# ======================================
+# Using a dedicated namespace means:
+# - kubectl delete namespace reliability-lab removes every lab resource
+#   in one command (clean reset).
+# - ResourceQuota and LimitRange can be scoped to just this namespace.
+# - RBAC roles can be namespace-scoped, following least-privilege.
+#
+# Kubernetes objects that are NOT namespace-scoped (cluster-scoped):
+# - Node, PersistentVolume, StorageClass, ClusterRole, ClusterRoleBinding
+# These are outside the scope of this lab.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: reliability-lab
+  labels:
+    app.kubernetes.io/managed-by: kubectl
+    # This label is read by Pod Security Admission (PSA), which replaced
+    # PodSecurityPolicy in Kubernetes 1.25.  "baseline" disallows privileged
+    # containers and host-namespace sharing while remaining permissive enough
+    # for standard workloads.
+    # "restricted" would require additional seccomp and allowPrivilegeEscalation
+    # settings; we use "baseline" here to keep the manifest readable.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/warn: restricted
